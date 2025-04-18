@@ -2,8 +2,8 @@ from typing import List, Dict, Any
 import google.generativeai as genai
 import numpy as np
 from dataclasses import dataclass
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+import re
+from collections import Counter
 
 @dataclass
 class Document:
@@ -11,48 +11,51 @@ class Document:
     metadata: dict = None
 
 # Global variables
-VECTORIZER = None
 DOCUMENTS = []
-VECTORS = None
 
-def compute_vectors(texts: List[str]) -> np.ndarray:
-    global VECTORIZER
-    if VECTORIZER is None:
-        VECTORIZER = TfidfVectorizer(stop_words='english')
-        return VECTORIZER.fit_transform(texts)
-    return VECTORIZER.transform(texts)
+def preprocess_text(text: str) -> List[str]:
+    """Simple text preprocessing."""
+    # Convert to lowercase and split into words
+    words = re.findall(r'\w+', text.lower())
+    # Remove common words
+    stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'is', 'are', 'was', 'were'}
+    return [w for w in words if w not in stop_words]
 
 def similarity_search(query: str, k: int = 4) -> List[Document]:
     if not DOCUMENTS:
         return []
     
-    query_vector = VECTORIZER.transform([query])
-    similarities = cosine_similarity(query_vector, VECTORS).flatten()
-    top_k_indices = np.argsort(similarities)[-k:][::-1]
+    # Preprocess query
+    query_words = set(preprocess_text(query))
     
+    # Calculate similarity scores using word overlap
+    scores = []
+    for doc in DOCUMENTS:
+        doc_words = set(preprocess_text(doc.page_content))
+        overlap = len(query_words & doc_words)
+        scores.append(overlap)
+    
+    # Get top k documents
+    top_k_indices = np.argsort(scores)[-k:][::-1]
     return [DOCUMENTS[i] for i in top_k_indices]
 
 def create_qa_chain(text: str, google_api_key: str):
-    global DOCUMENTS, VECTORS
+    global DOCUMENTS
     
     # Configure the Gemini API
     genai.configure(api_key=google_api_key)
     
     # Split text into chunks (simple splitting by sentences)
-    chunks = [s.strip() for s in text.split('.') if len(s.strip()) > 50]
+    chunks = [s.strip() + '.' for s in text.split('.') if len(s.strip()) > 50]
     
-    # Create documents and compute vectors
+    # Create documents
     new_documents = [Document(page_content=chunk) for chunk in chunks]
-    new_vectors = compute_vectors([doc.page_content for doc in new_documents])
     
     # Update global storage
     if not DOCUMENTS:
         DOCUMENTS.extend(new_documents)
-        VECTORS = new_vectors
     else:
         DOCUMENTS.extend(new_documents)
-        VECTORS = np.vstack([VECTORS.toarray(), new_vectors.toarray()])
-        VECTORS = VECTORS.reshape(-1, VECTORS.shape[1])
     
     # Initialize Gemini Pro model
     model = genai.GenerativeModel(model_name="gemini-1.5-pro")
@@ -106,8 +109,6 @@ Answer:"""
     return QAChain(model)
 
 def clear_vector_store():
-    """Clear the stored documents and vectors."""
-    global DOCUMENTS, VECTORS, VECTORIZER
+    """Clear the stored documents."""
+    global DOCUMENTS
     DOCUMENTS = []
-    VECTORS = None
-    VECTORIZER = None

@@ -2,8 +2,19 @@
     "version": 2,
     "builds": [
         {
-            "src": "api/*.py",
-            "use": "@vercel/python"
+            "src": "api/upload.py",
+            "use": "@vercel/python",
+            "config": { "runtime": "python3.9", "pip_requirements": "api/requirements-upload.txt" }
+        },
+        {
+            "src": "api/query.py",
+            "use": "@vercel/python",
+            "config": { "runtime": "python3.9", "pip_requirements": "api/requirements-query.txt" }
+        },
+        {
+            "src": "api/index.py",
+            "use": "@vercel/python",
+            "config": { "runtime": "python3.9", "pip_requirements": "api/requirements-index.txt" }
         }
     ],
     "routes": [
