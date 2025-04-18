@@ -1,25 +1,41 @@
-from langchain_community.vectorstores import Chroma
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-import google.generativeai as genai
+from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Any
+import google.generativeai as genai
+import numpy as np
+from dataclasses import dataclass
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
-# Global vector store and embeddings
-VECTOR_STORE = None
-EMBEDDINGS = None
+@dataclass
+class Document:
+    page_content: str
+    metadata: dict = None
+
+# Global variables
+EMBEDDINGS_MODEL = None
+DOCUMENTS = []
+EMBEDDINGS = []
+
+def compute_embeddings(texts: List[str]) -> np.ndarray:
+    global EMBEDDINGS_MODEL
+    if EMBEDDINGS_MODEL is None:
+        EMBEDDINGS_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
+    return EMBEDDINGS_MODEL.encode(texts, convert_to_tensor=False)
+
+def similarity_search(query: str, k: int = 4) -> List[Document]:
+    if not DOCUMENTS:
+        return []
+    
+    query_embedding = compute_embeddings([query])[0]
+    similarities = np.dot(EMBEDDINGS, query_embedding)
+    top_k_indices = np.argsort(similarities)[-k:][::-1]
+    
+    return [DOCUMENTS[i] for i in top_k_indices]
 
 def create_qa_chain(text: str, google_api_key: str):
-    global VECTOR_STORE, EMBEDDINGS
+    global DOCUMENTS, EMBEDDINGS
     
     # Configure the Gemini API
     genai.configure(api_key=google_api_key)
-    
-    # Initialize embeddings if not already initialized
-    if EMBEDDINGS is None:
-        EMBEDDINGS = GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001",
-            google_api_key=google_api_key
-        )
     
     # Split text into chunks
     text_splitter = RecursiveCharacterTextSplitter(
@@ -28,29 +44,32 @@ def create_qa_chain(text: str, google_api_key: str):
     )
     chunks = text_splitter.split_text(text)
     
-    # Create or update vector store
-    if VECTOR_STORE is None:
-        VECTOR_STORE = Chroma.from_texts(chunks, EMBEDDINGS)
-    else:
-        # Add new chunks to existing vector store
-        VECTOR_STORE.add_texts(chunks)
+    # Create documents and compute embeddings
+    new_documents = [Document(page_content=chunk) for chunk in chunks]
+    new_embeddings = compute_embeddings([doc.page_content for doc in new_documents])
     
-    # Initialize Gemini Pro model with the correct model name
+    # Update global storage
+    if not DOCUMENTS:
+        DOCUMENTS.extend(new_documents)
+        EMBEDDINGS = new_embeddings
+    else:
+        DOCUMENTS.extend(new_documents)
+        EMBEDDINGS = np.vstack([EMBEDDINGS, new_embeddings])
+    
+    # Initialize Gemini Pro model
     model = genai.GenerativeModel(model_name="gemini-1.5-pro")
     
     class QAChain:
-        def __init__(self, model, vector_store):
+        def __init__(self, model):
             self.model = model
-            self.vector_store = vector_store
         
         def invoke(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 question = inputs["query"]
                 # Get relevant documents
-                docs = self.vector_store.similarity_search(question, k=4)
+                docs = similarity_search(question, k=4)
                 context = "\n\n".join(doc.page_content for doc in docs)
                 
-                # Create the prompt
                 prompt = f"""Use the following context to answer the question. If you don't know the answer, just say that you don't know, don't try to make up an answer.
 
 Context:
@@ -60,7 +79,6 @@ Question: {question}
 
 Answer:"""
                 
-                # Generate response with simple configuration
                 generation_config = genai.types.GenerationConfig(
                     temperature=0.3,
                     max_output_tokens=2048,
@@ -87,9 +105,10 @@ Answer:"""
                     "source_documents": []
                 }
     
-    return QAChain(model, VECTOR_STORE)
+    return QAChain(model)
 
 def clear_vector_store():
-    """Clear the vector store."""
-    global VECTOR_STORE
-    VECTOR_STORE = None
+    """Clear the stored documents and embeddings."""
+    global DOCUMENTS, EMBEDDINGS
+    DOCUMENTS = []
+    EMBEDDINGS = np.array([])
