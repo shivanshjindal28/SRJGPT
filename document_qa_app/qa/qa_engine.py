@@ -1,4 +1,4 @@
-from langchain_community.vectorstores import FAISS
+from langchain_community.vectorstores import Chroma
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 import google.generativeai as genai
@@ -30,7 +30,7 @@ def create_qa_chain(text: str, google_api_key: str):
     
     # Create or update vector store
     if VECTOR_STORE is None:
-        VECTOR_STORE = FAISS.from_texts(chunks, EMBEDDINGS)
+        VECTOR_STORE = Chroma.from_texts(chunks, EMBEDDINGS)
     else:
         # Add new chunks to existing vector store
         VECTOR_STORE.add_texts(chunks)
