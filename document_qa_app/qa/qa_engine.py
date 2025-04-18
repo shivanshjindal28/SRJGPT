@@ -1,9 +1,9 @@
-from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Any
 import google.generativeai as genai
 import numpy as np
 from dataclasses import dataclass
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 @dataclass
 class Document:
@@ -11,50 +11,48 @@ class Document:
     metadata: dict = None
 
 # Global variables
-EMBEDDINGS_MODEL = None
+VECTORIZER = None
 DOCUMENTS = []
-EMBEDDINGS = []
+VECTORS = None
 
-def compute_embeddings(texts: List[str]) -> np.ndarray:
-    global EMBEDDINGS_MODEL
-    if EMBEDDINGS_MODEL is None:
-        EMBEDDINGS_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
-    return EMBEDDINGS_MODEL.encode(texts, convert_to_tensor=False)
+def compute_vectors(texts: List[str]) -> np.ndarray:
+    global VECTORIZER
+    if VECTORIZER is None:
+        VECTORIZER = TfidfVectorizer(stop_words='english')
+        return VECTORIZER.fit_transform(texts)
+    return VECTORIZER.transform(texts)
 
 def similarity_search(query: str, k: int = 4) -> List[Document]:
     if not DOCUMENTS:
         return []
     
-    query_embedding = compute_embeddings([query])[0]
-    similarities = np.dot(EMBEDDINGS, query_embedding)
+    query_vector = VECTORIZER.transform([query])
+    similarities = cosine_similarity(query_vector, VECTORS).flatten()
     top_k_indices = np.argsort(similarities)[-k:][::-1]
     
     return [DOCUMENTS[i] for i in top_k_indices]
 
 def create_qa_chain(text: str, google_api_key: str):
-    global DOCUMENTS, EMBEDDINGS
+    global DOCUMENTS, VECTORS
     
     # Configure the Gemini API
     genai.configure(api_key=google_api_key)
     
-    # Split text into chunks
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200
-    )
-    chunks = text_splitter.split_text(text)
+    # Split text into chunks (simple splitting by sentences)
+    chunks = [s.strip() for s in text.split('.') if len(s.strip()) > 50]
     
-    # Create documents and compute embeddings
+    # Create documents and compute vectors
     new_documents = [Document(page_content=chunk) for chunk in chunks]
-    new_embeddings = compute_embeddings([doc.page_content for doc in new_documents])
+    new_vectors = compute_vectors([doc.page_content for doc in new_documents])
     
     # Update global storage
     if not DOCUMENTS:
         DOCUMENTS.extend(new_documents)
-        EMBEDDINGS = new_embeddings
+        VECTORS = new_vectors
     else:
         DOCUMENTS.extend(new_documents)
-        EMBEDDINGS = np.vstack([EMBEDDINGS, new_embeddings])
+        VECTORS = np.vstack([VECTORS.toarray(), new_vectors.toarray()])
+        VECTORS = VECTORS.reshape(-1, VECTORS.shape[1])
     
     # Initialize Gemini Pro model
     model = genai.GenerativeModel(model_name="gemini-1.5-pro")
@@ -108,7 +106,8 @@ Answer:"""
     return QAChain(model)
 
 def clear_vector_store():
-    """Clear the stored documents and embeddings."""
-    global DOCUMENTS, EMBEDDINGS
+    """Clear the stored documents and vectors."""
+    global DOCUMENTS, VECTORS, VECTORIZER
     DOCUMENTS = []
-    EMBEDDINGS = np.array([])
+    VECTORS = None
+    VECTORIZER = None
